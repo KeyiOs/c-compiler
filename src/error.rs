@@ -94,7 +94,7 @@ pub enum ParseError {
     ExpectedCommaOrClosingParen { found: String, line: u16 },
     DefaultCaseNotLast(u16),
     ExpectedCase { found: String, line: u16 },
-    ExpectedCaseIdentifier { found: String, line: u16 },
+    InvalidCaseLabel(u16),
     EmptySwitch(u16),
     ExpectedIdentifierOrSemicolon(u16),
     EmptyEnum(u16),
@@ -142,8 +142,8 @@ impl fmt::Display for ParseError {
                 write!(f, "Default case must be the last case in switch on line {}", line),
             ParseError::ExpectedCase { found, line } => 
                 write!(f, "Expected 'case' in switch statement on line {} but found {}", line, found),
-            ParseError::ExpectedCaseIdentifier { found, line } => 
-                write!(f, "Expected case identifier on line {}, but found {}", line, found),
+            ParseError::InvalidCaseLabel(line) => 
+                write!(f, "Case label must be an integer constant expression on line {}", line),
             ParseError::EmptySwitch(line) => 
                 write!(f, "Switch must have at least one case on line {}", line),
             ParseError::ExpectedIdentifierOrSemicolon(line) => 
@@ -156,8 +156,8 @@ impl fmt::Display for ParseError {
                 write!(f, "Function '{}' cannot be declared inside another function on line {}", identifier, line),
             ParseError::ReturnOutsideFunction(line) => 
                 write!(f, "'return' is not allowed at file scope on line {}", line),
-            ParseError::StructMemberInitializer(line) => 
-                write!(f, "Struct members cannot have initializers on line {}", line),
+            ParseError::StructMemberInitializer(line) =>
+                write!(f, "Struct declaration members cannot have initializers (line {})", line),
             ParseError::DesignatedInitializerOnNonStruct(line) => 
                 write!(f, "Designated initializers can only be used with struct types on line {}", line),
         }
@@ -170,18 +170,46 @@ pub type ParseResult<T> = Result<T, ParseError>;
 
 #[derive(Debug, Clone)]
 pub enum SemanticError {
-    UndeclaredIdentifier(String),
     DuplicateIdentifier(String),
+    TypeMismatch(String),
+    UndefinedVariable(String),
+    UndefinedFunction(String),
+    ArgumentCountMismatch {
+        function: String,
+        expected: usize,
+        found: usize,
+    },
+    StructMemberCountMismatch {
+        struct_name: String,
+        expected: usize,
+        found: usize,
+    },
+    InternalError(String),
 }
 
 impl fmt::Display for SemanticError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SemanticError::UndeclaredIdentifier(name) => {
-                write!(f, "Undeclared identifier: '{}'", name)
-            }
             SemanticError::DuplicateIdentifier(name) => {
                 write!(f, "Duplicate identifier: '{}'", name)
+            }
+            SemanticError::TypeMismatch(msg) => {
+                write!(f, "Type mismatch: {}", msg)
+            }
+            SemanticError::UndefinedVariable(name) => {
+                write!(f, "Undefined variable: '{}'", name)
+            }
+            SemanticError::UndefinedFunction(name) => {
+                write!(f, "Undefined function: '{}'", name)
+            }
+            SemanticError::ArgumentCountMismatch { function, expected, found } => {
+                write!(f, "Function '{}' expects {} argument(s), but found {}", function, expected, found)
+            }
+            SemanticError::StructMemberCountMismatch { struct_name, expected, found } => {
+                write!(f, "Struct '{}' member count mismatch: expected {}, found {}", struct_name, expected, found)
+            }
+            SemanticError::InternalError(msg) => {
+                write!(f, "Internal error: {}", msg)
             }
         }
     }
@@ -196,7 +224,7 @@ pub enum SymbolError {
     SymbolAlreadyExists { name: String },
     SymbolNotFound { name: String },
     NotAFunction { name: String },
-    NotAVariable { name: String },
+    TypeMismatch { name: String, message: String },
 }
 
 impl fmt::Display for SymbolError {
@@ -208,8 +236,8 @@ impl fmt::Display for SymbolError {
                 write!(f, "Symbol '{}' not found", name),
             SymbolError::NotAFunction { name } =>
                 write!(f, "Symbol '{}' is not a function", name),
-            SymbolError::NotAVariable { name } =>
-                write!(f, "Symbol '{}' is not a variable", name),
+            SymbolError::TypeMismatch { name, message } =>
+                write!(f, "Type mismatch for '{}': {}", name, message),
         }
     }
 }

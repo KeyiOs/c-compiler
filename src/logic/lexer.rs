@@ -2,7 +2,7 @@ use std::iter::Peekable;
 use std::str::Chars;
 
 use crate::data::TokenType;
-use crate::data::definitions::{DOUBLE_OPERATOR_MAP, KEYWORD_MAP, SINGLE_OPERATOR_MAP, TRIPLE_OPERATOR_MAP};
+use crate::data::definitions::{DOUBLE_OPERATOR_MAP, KEYWORD_MAP, SINGLE_OPERATOR_MAP, TRIPLE_OPERATOR_MAP, Type};
 use crate::error::{LexerError, LexerResult};
 
 
@@ -69,7 +69,7 @@ pub fn lexer_start(source: &str) -> LexerResult<Vec<Token>> {
                     let oct_value = u32::from_str_radix(&oct_digits, 8)
                         .map_err(|_| LexerError::InvalidOctalNumber { value: oct_digits.clone(), line })?;
 
-                    token.push(Token::new(TokenType::Literal(oct_value.to_string(), "number".to_string()), line));
+                    token.push(Token::new(TokenType::Literal(oct_value.to_string(), Type::Int), line));
                     start_of_line = false;
 
                     continue;
@@ -93,7 +93,7 @@ pub fn lexer_start(source: &str) -> LexerResult<Vec<Token>> {
                     let hex_value = u32::from_str_radix(&hex_digits, 16)
                         .map_err(|_| LexerError::InvalidHexNumber { value: hex_digits.clone(), line })?;
 
-                    token.push(Token::new(TokenType::Literal(hex_value.to_string(), "number".to_string()), line));
+                    token.push(Token::new(TokenType::Literal(hex_value.to_string(), Type::Int), line));
                     start_of_line = false;
 
                     continue;
@@ -146,7 +146,7 @@ pub fn lexer_start(source: &str) -> LexerResult<Vec<Token>> {
 
                         let c = c.to_ascii_lowercase();
 
-                        if c != 'u' && c != 'l' && c != 'f' {
+                        if c != 'u' && c != 'l' && c != 'f' && c != 'd' {
                             break;
                         }
 
@@ -159,7 +159,7 @@ pub fn lexer_start(source: &str) -> LexerResult<Vec<Token>> {
                         }
                     }
 
-                    if !matches!(suffix.to_ascii_lowercase().as_str(), "u" | "l" | "f" | "ul" | "lu" | "ll" | "ull" | "llu" | "lf") {
+                    if !matches!(suffix.to_ascii_lowercase().as_str(), "u" | "d" | "l" | "f" | "ul" | "ll" | "ull" | "lf" | "ld") {
                         return Err(LexerError::InvalidNumberSuffix { line });
                     }
 
@@ -169,7 +169,37 @@ pub fn lexer_start(source: &str) -> LexerResult<Vec<Token>> {
                 }
             }
 
-            token.push(Token::new(TokenType::Literal(buffer.clone(), "number".to_string()), line));
+            let literal_type = if buffer.chars().last().map_or(false, |c| c.is_ascii_alphabetic()) {
+                let suffix = buffer.to_ascii_lowercase();
+
+                if suffix.ends_with("ull") {
+                    Type::Unsigned(Box::new(Type::LongLong))
+                } else if suffix.ends_with("ul") {
+                    Type::Unsigned(Box::new(Type::Long))
+                } else if suffix.ends_with("ll") {
+                    Type::LongLong
+                } else if suffix.ends_with("lf"){
+                    Type::LongFloat
+                } else if suffix.ends_with("ld") {
+                    Type::LongDouble
+                } else if suffix.ends_with("u") {
+                    Type::Unsigned(Box::new(Type::Int))
+                } else if suffix.ends_with("d") {
+                    Type::Double
+                } else if suffix.ends_with("l") {
+                    Type::Long
+                } else if suffix.ends_with('f') {
+                    Type::Float
+                } else {
+                    Type::Int
+                }
+            } else if has_decimal {
+                Type::Double
+            } else {
+                Type::Int
+            };
+
+            token.push(Token::new(TokenType::Literal(buffer.clone(), literal_type), line));
             has_decimal = false;
             
             buffer.clear();
@@ -197,9 +227,9 @@ pub fn lexer_start(source: &str) -> LexerResult<Vec<Token>> {
 
                     let char_literal = process_escape_sequence(&mut chars, line)?;
 
-                    token.push(Token::new(TokenType::Literal(char_literal, "char".to_string()), line));
+                    token.push(Token::new(TokenType::Literal(char_literal, Type::Char), line));
                 } else {    
-                    token.push(Token::new(TokenType::Literal(character.to_string(), "char".to_string()), line));
+                    token.push(Token::new(TokenType::Literal(character.to_string(), Type::Char), line));
                 }
 
                 if chars.next() != Some('\'') {
@@ -236,7 +266,7 @@ pub fn lexer_start(source: &str) -> LexerResult<Vec<Token>> {
                             }
 
                             if !found_quote {
-                                token.push(Token::new(TokenType::Literal(string_lit, "string".to_string()), line));
+                                token.push(Token::new(TokenType::Literal(string_lit, Type::Pointer(Box::new(Type::Char))), line));
                                 ok = true;
                                 break;
                             }

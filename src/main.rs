@@ -3,9 +3,9 @@ mod logic;
 mod error;
 
 use std::process::Command;
-use logic::{Token, Tokens, lexer_start, parser_start, semantic_analyze};
+use logic::{Token, Tokens, lexer_start, parser_start, semantic_analyze, SemanticContext};
 
-use crate::data::AstNode;
+use crate::data::SymbolTable;
 use crate::data::TokenType;
 
 const INPUT_CODE: &str = "./input/test.c";
@@ -35,7 +35,13 @@ fn main() {
         }
     };
 
-    if let Err(e) = semantic_analyze(&ast) {
+    let mut sem_ctx = SemanticContext {
+        fn_table: SymbolTable::new(),
+        var_table: SymbolTable::new(),
+        scope: vec!["global".to_string()],
+    };
+
+    if let Err(e) = semantic_analyze(&ast, &mut sem_ctx) {
         eprintln!("\nSemantic Error: {}\n", e);
         return;
     }
@@ -43,8 +49,6 @@ fn main() {
     /* - DEGUB - */
     let json = serde_json::to_string_pretty(&ast).unwrap();
     println!("{}\n\n\n", json);
-
-    // print_ast(&ast);
 }
 
 
@@ -58,265 +62,4 @@ fn preproces_source(file_path: &str) -> Result<String, Box<dyn std::error::Error
     }
 
     Ok(String::from_utf8(output.stdout)?)
-}
-
-
-/* * * * * * * */
-/*  - DEGUB -  */
-/* * * * * * * */
-const CYAN: &str = "\x1b[1;36m";
-const YELLOW: &str = "\x1b[1;33m";
-const GREEN: &str = "\x1b[1;32m";
-const MAGENTA: &str = "\x1b[1;35m";
-const RED: &str = "\x1b[1;31m";
-const RESET: &str = "\x1b[0m";
-
-pub fn print_ast(nodes: &[AstNode]) {
-    println!("\n\n\n---------------------------------------------------------");
-
-    fn print_name(name: &str, prefix: &str, last: bool) -> String {
-        println!("{}{}{}", CYAN, name, RESET);
-        format!("{}{}", prefix, if last { "    " } else { "│   " })
-    }
-
-    fn print_body(body: &[AstNode], new_prefix: &str) {
-        let len = body.len();
-        for (i, stmt) in body.iter().enumerate() {
-            let is_last = i == len - 1;
-            inner(stmt, &new_prefix, is_last, None);
-        }
-    }
-
-    fn inner(node: &AstNode, prefix: &str, last: bool, side: Option<&str>) {
-        let branch = if last { "└─ " } else { "├─ " };
-        print!("{}", prefix);
-        print!("{}", branch);
-
-        let side_label = side.map_or("".to_string(), |s| format!(" {}{}", MAGENTA, s));
-
-        match node {
-            AstNode::ArrayAccess { array, index } => {
-                println!("{}ArrayAccess{}{}", YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                inner(array, &new_prefix, false, Some("array"));
-                inner(index, &new_prefix, true, Some("index"));
-            }
-            AstNode::IfStatement { condition, body, else_branch } => {
-                let new_prefix = print_name("IfStatement", prefix, last);
-
-                inner(condition, &new_prefix, body.is_empty() && else_branch.is_none(), None);
-
-                for (i, stmt) in body.iter().enumerate() {
-                    let is_last = i == body.len() - 1 && else_branch.is_none();
-                    inner(stmt, &new_prefix, is_last, None);
-                }
-
-                if let Some(else_node) = else_branch {
-                    inner(else_node, &new_prefix, true, None);
-                }
-            }
-            AstNode::ForStatement { declarations, condition, increments, body } => {
-                println!("{}ForStatement{}", CYAN, RESET);
-
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                if let Some(decls) = declarations {
-                    for decl in decls {
-                        inner(decl, &new_prefix, false, None);
-                    }
-                }
-
-                if let Some(cond) = condition {
-                    inner(cond, &new_prefix, false, None);
-                }
-
-                if let Some(incrs) = increments {
-                    for incr in incrs {
-                        inner(incr, &new_prefix, body.is_empty(), None);
-                    }
-                }
-
-                print_body(body, &new_prefix);
-            }
-            AstNode::FnDeclaration { return_type, identifier, parameters } => {
-                println!("{}FnDeclaration ({}{}{}: {}{}{}){}{}", CYAN, RED, identifier, CYAN, RED, return_type, CYAN, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                for (i, (param_type, param_name)) in parameters.iter().enumerate() {
-                    let is_last = i == parameters.len() - 1;
-                    println!("{}{}{}Parameter ({}{}{}: {}{}{}){}", new_prefix, if is_last { "└─ " } else { "├─ " }, GREEN, RED, param_name, GREEN, RED, param_type, GREEN, RESET);
-                }
-            }
-            AstNode::FnDefinition { return_type, identifier, parameters, body } => {
-                println!("{}FnDefinition ({}{}{}: {}{}{}){}{}", CYAN, RED, identifier, CYAN, RED, return_type, CYAN, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                for (i, (param_type, param_name)) in parameters.iter().enumerate() {
-                    let is_last = i == parameters.len() - 1;
-                    println!("{}{}{}Parameter ({}{}{}: {}{}{}){}", new_prefix, if is_last { "└─ " } else { "├─ " }, GREEN, RED, param_name, GREEN, RED, param_type, GREEN, RESET);
-                }
-
-                if !parameters.is_empty() {
-                    let body_prefix = format!("{}    ", new_prefix);
-                    print_body(body, &body_prefix);
-                } else {
-                    print_body(body, &new_prefix);
-                }
-            }
-            AstNode::VarDeclaration { var_type, identifier, value } => {
-                println!("{}VarDeclaration ({}{:?}{}: {}{}{}){}{}", CYAN, RED, identifier, CYAN, RED, var_type, CYAN, side_label, RESET);
-                if let Some(val) = value {
-                    let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                    inner(val, &new_prefix, true, None);
-                }
-            }
-            AstNode::ArrayInitializer { items } => {
-                println!("{}ArrayInitializer{}{}", YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                for (i, item) in items.iter().enumerate() {
-                    let is_last = i == items.len() - 1;
-                    inner(item, &new_prefix, is_last, None);
-                }
-            }
-            AstNode::DesignatedInitializer { members } => {
-                println!("{}DesignatedInitializer{}{}", YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                for (i, (member_name, value)) in members.iter().enumerate() {
-                    let is_last = i == members.len() - 1;
-                    println!("{}{}{}.{}{}", new_prefix, if is_last { "└─ " } else { "├─ " }, GREEN, member_name, RESET);
-                    let val_prefix = format!("{}{}", new_prefix, if is_last { "    " } else { "│   " });
-                    inner(value, &val_prefix, true, None);
-                }
-            }
-            AstNode::ElseStatement { condition, body, else_branch } => {
-                let new_prefix = print_name("ElseStatement", prefix, last);
-
-                if let Some(cond) = condition {
-                    inner(cond, &new_prefix, body.is_empty() && else_branch.is_none(), None);
-                }
-
-                for (i, stmt) in body.iter().enumerate() {
-                    let is_last = i == body.len() - 1 && else_branch.is_none();
-                    inner(stmt, &new_prefix, is_last, None);
-                }
-
-                if let Some(else_node) = else_branch {
-                    inner(else_node, &new_prefix, true, None);
-                }
-            }
-            AstNode::WhileStatement { condition, body} => {
-                let new_prefix = print_name("WhileStatement", prefix, last);
-                inner(condition, &new_prefix, body.is_empty(), None);
-                print_body(body, &new_prefix);
-            }
-            AstNode::Switch { identifier, cases } => {
-                println!("{}Switch{}", CYAN, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                inner(identifier, &new_prefix, cases.is_empty(), Some("identifier"));
-                for (i, case) in cases.iter().enumerate() {
-                    let is_last = i == cases.len() - 1;
-                    inner(case, &new_prefix, is_last, None);
-                }
-            }
-            AstNode::Case { identifier, body } => {
-                println!("{}Case({}{}{}){}", CYAN, RED, identifier, CYAN, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                print_body(body, &new_prefix);
-            }
-            AstNode::Struct { identifier, members, variables } => {
-                println!("{}Struct({}{}{}){}", CYAN, RED, identifier, CYAN, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                
-                for (i, member) in members.iter().enumerate() {
-                    let is_last = i == members.len() - 1 && variables.is_empty();
-                    inner(member, &new_prefix, is_last, None);
-                }
-
-                for (i, var) in variables.iter().enumerate() {
-                    let is_last = i == variables.len() - 1;
-                    println!("{}{}{}Variable({}{}{}: {}{}{}){}", new_prefix, if is_last { "└─ " } else { "├─ " }, GREEN, RED, var.1, GREEN, RED, var.0, GREEN, RESET);
-                    if let Some(val) = &var.2 {
-                        let val_prefix = format!("{}{}", new_prefix, if is_last { "    " } else { "│   "});
-                        inner(val, &val_prefix, true, None);
-                    }
-                }
-            }
-            AstNode::StructDeclaration { struct_name, identifier } => {
-                println!("{}StructDeclaration ({}{}{}: {}{}{}){}{}", CYAN, RED, identifier, CYAN, RED, struct_name, CYAN, side_label, RESET);
-            }
-            AstNode::Enum { identifier, variants } => {
-                println!("{}Enum({}{}{}){}", CYAN, RED, identifier, CYAN, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                for (i, (variant_name, variant_value)) in variants.iter().enumerate() {
-                    let is_last = i == variants.len() - 1;
-                    match variant_value {
-                        Some(value) => println!("{}{}{}Variant({}{}{}{}{}){}", new_prefix, if is_last { "└─ " } else { "├─ " }, GREEN, RED, variant_name, MAGENTA, if !value.is_empty() { format!(" {{{}}}", value) } else { String::new() }, GREEN, RESET),
-                        None => println!("{}{}{}Variant({}{}{}){}", new_prefix, if is_last { "└─ " } else { "├─ " }, GREEN, RED, variant_name, GREEN, RESET),
-                    }
-                }
-            }
-            AstNode::BinaryOperation { left, operator, right } => {
-                println!("{}BinaryOperation ({}{}{}){}{}", YELLOW, RED, operator, YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                inner(left, &new_prefix, false, Some("L"));
-                inner(right, &new_prefix, true, Some("R"));
-            }
-            AstNode::UnaryOperation { operand, operator } => {
-                println!("{}UnaryOperation ({}{}{}){}{}", YELLOW, RED, operator, YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                inner(operand, &new_prefix, true, None);
-            }
-            AstNode::FunctionCall { identifier, arguments } => {
-                println!("{}FunctionCall ({}{}{}){}{}", YELLOW, RED, identifier, YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                for (i, arg) in arguments.iter().enumerate() {
-                    let is_last = i == arguments.len() - 1;
-                    inner(arg, &new_prefix, is_last, None);
-                }
-            }
-            AstNode::Printf { format_string, arguments } => {
-                println!("{}Printf ({}\"{}\"{}){}{}", YELLOW, RED, format_string, YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                for (i, arg) in arguments.iter().enumerate() {
-                    let is_last = i == arguments.len() - 1;
-                    inner(arg, &new_prefix, is_last, None);
-                }
-            }
-            AstNode::Return { expression } => {
-                println!("{}Return{}", CYAN, RESET);
-                if let Some(expr) = expression {
-                    let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                    inner(expr, &new_prefix, true, None);
-                }
-            }
-            AstNode::Literal { value, data_type } => {
-                println!("{}Literal({}{}{}: {}{}{}){}{}", GREEN, RED, value, GREEN, RED, data_type, GREEN, side_label, RESET);
-            }
-            AstNode::Break => {
-                println!("{}Break{}", GREEN, RESET);
-            }
-            AstNode::Continue => {
-                println!("{}Continue{}", GREEN, RESET);
-            }
-            AstNode::Dereference { operand } => {
-                println!("{}Dereference (*){}{}", YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                inner(operand, &new_prefix, true, None);
-            }
-            AstNode::Reference { operand } => {
-                println!("{}Reference (&){}{}", YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                inner(operand, &new_prefix, true, None);
-            }
-            AstNode::MemberAccess { object, member, is_arrow } => {
-                println!("{}MemberAccess ({}{}{}){}{}", YELLOW, RED, if *is_arrow { "->" } else { "." }, YELLOW, side_label, RESET);
-                let new_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
-                inner(object, &new_prefix, false, Some("object"));
-                println!("{}{}{}.{}{}{}", new_prefix, "└─ ", GREEN, member, GREEN, RESET);
-            }
-        }
-    }
-
-    for (i, node) in nodes.iter().enumerate() {
-        inner(node, "", i == nodes.len() - 1, None);
-    }
-
-    println!("{}", RESET);
 }

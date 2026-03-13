@@ -3,14 +3,14 @@ use std::fmt;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TokenType {
     Keyword(String),
     Operator(String),
-    Literal(String, String),
+    Literal(String, Type),
     Identifier(String),
     EOF,
 }
@@ -29,22 +29,27 @@ impl TokenType {
 }
 
 
-#[derive(Debug, PartialEq, Eq, Serialize, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Type {
-    Void,
+    Array(Box<Type>, Option<usize>),
     Bool,
     Char,
-    Int,
-    Float,
     Double,
-    Short,
+    Enum(String),
+    Float,
+    Identifier,
+    Int,
     Long,
+    LongDouble,
+    LongFloat,
     LongLong,
-    Unsigned(Box<Type>),
-    Signed(Box<Type>),
     Pointer(Box<Type>),
-    Array(Box<Type>, Option<String>),
+    Short,
+    Signed(Box<Type>),
     Struct(String),
+    Unsigned(Box<Type>),
+    Void,
+    None,
 }
 
 impl FromStr for Type {
@@ -65,30 +70,86 @@ impl FromStr for Type {
             _ => Err(()),
         }
     }
+    
+}
+
+impl Serialize for Type {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Type::Array(inner, size) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                #[derive(Serialize)]
+                struct ArrayFields<'a> {
+                    #[serde(rename = "Type")]
+                    ty: &'a Type,
+                    size: &'a Option<usize>,
+                }
+                let fields = ArrayFields { ty: &**inner, size };
+                map.serialize_entry("Array", &fields)?;
+                map.end()
+            },
+            Type::Pointer(inner) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                #[derive(Serialize)]
+                struct PointerFields<'a> {
+                    #[serde(rename = "Type")]
+                    ty: &'a Type,
+                }
+                let fields = PointerFields { ty: &**inner };
+                map.serialize_entry("Pointer", &fields)?;
+                map.end()
+            },
+            Type::Struct(name) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                #[derive(Serialize)]
+                struct StructFields<'a> {
+                    #[serde(rename = "Identifier")]
+                    name: &'a String,
+                }
+                let fields = StructFields { name };
+                map.serialize_entry("Struct", &fields)?;
+                map.end()
+            },
+            _ => {
+                serializer.serialize_str(&format!("{}", self))
+            }
+        }
+    }
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Void => write!(f, "Void"),
-            Type::Bool => write!(f, "Bool"),
-            Type::Char => write!(f, "Char"),
-            Type::Int => write!(f, "Int"),
-            Type::Float => write!(f, "Float"),
-            Type::Double => write!(f, "Double"),
-            Type::Short => write!(f, "Short"),
-            Type::Long => write!(f, "Long"),
-            Type::LongLong => write!(f, "LongLong"),
-            Type::Unsigned(inner) => write!(f, "Unsigned({})", inner),
-            Type::Signed(inner) => write!(f, "Signed({})", inner),
-            Type::Pointer(inner) => write!(f, "Pointer({})", inner),
             Type::Array(inner, size) => {
                 match size {
                     Some(s) => write!(f, "Array({}, Size[{}])", inner, s),
                     None => write!(f, "Array({}, None)", inner),
                 }
             }
-            Type::Struct(name) => write!(f, "Struct(\"{}\")", name),
+            Type::Bool => write!(f, "Bool"),
+            Type::Char => write!(f, "Char"),
+            Type::Double => write!(f, "Double"),
+            Type::Enum(name) => write!(f, "Enum({})", name),
+            Type::Float => write!(f, "Float"),
+            Type::Identifier => write!(f, "Identifier"),
+            Type::Int => write!(f, "Int"),
+            Type::Long => write!(f, "Long"),
+            Type::LongDouble => write!(f, "LongDouble"),
+            Type::LongFloat => write!(f, "LongFloat"),
+            Type::LongLong => write!(f, "LongLong"),
+            Type::None => write!(f, "None"),
+            Type::Pointer(inner) => write!(f, "Pointer({})", inner),
+            Type::Short => write!(f, "Short"),
+            Type::Signed(inner) => write!(f, "Signed({})", inner),
+            Type::Struct(name) => write!(f, "Struct({})", name),
+            Type::Unsigned(inner) => write!(f, "Unsigned({})", inner),
+            Type::Void => write!(f, "Void"),
         }
     }
 }
@@ -272,6 +333,7 @@ pub enum TripleOperator {
     RightShiftEqual,
 }
 
+
 pub static TRIPLE_OPERATOR_MAP: LazyLock<HashMap<&str, TripleOperator>> = LazyLock::new(|| {
     HashMap::from([
         ("<<=", TripleOperator::LeftShiftEqual),
@@ -287,25 +349,36 @@ pub enum AstNode {
         index: Box<AstNode>,
     },
 
+    ArrayInitializer {
+        items: Vec<AstNode>,
+    },
+
     BinaryOperation {
         left: Box<AstNode>,
         operator: String,
         right: Box<AstNode>,
     },
 
+    Break,
+
     Case {
-        identifier: String,
+        identifier: Box<AstNode>,
         body: Vec<AstNode>,
     },
 
-    ElseStatement {
-        condition: Option<Box<AstNode>>,
-        body: Vec<AstNode>,
-        else_branch: Option<Box<AstNode>>,
-    },
+    Continue,
 
     Dereference {
         operand: Box<AstNode>,
+    },
+
+    DesignatedInitializer {
+        members: Vec<(String, AstNode)>,
+    },
+
+    ElseStatement {
+        if_statement: Option<Box<AstNode>>,
+        body: Option<Vec<AstNode>>,
     },
 
     Enum {
@@ -318,7 +391,7 @@ pub enum AstNode {
         identifier: String,
         parameters: Vec<(Type, String)>,
     },
-    
+
     FnDefinition {
         return_type: Type,
         identifier: String,
@@ -344,6 +417,17 @@ pub enum AstNode {
         else_branch: Option<Box<AstNode>>,
     },
 
+    Literal {
+        value: String,
+        data_type: Type,
+    },
+
+    MemberAccess {
+        object: Box<AstNode>,
+        member: String,
+        is_arrow: bool,
+    },
+
     Printf {
         format_string: String,
         arguments: Vec<AstNode>,
@@ -357,15 +441,21 @@ pub enum AstNode {
         expression: Option<Box<AstNode>>,
     },
 
-    Struct {
-        identifier: String,
-        members: Vec<AstNode>,
-        variables: Vec<(Type, String, Option<Box<AstNode>>)>,
-    },
-
     StructDeclaration {
         identifier: String,
-        struct_name: String,
+        members: Vec<AstNode>,
+    },
+
+    StructDefinition {
+        identifier: String,
+        #[serde(serialize_with = "serialize_struct_vars")]
+        variables: Vec<(AstNode, Vec<AstNode>)>,
+    },
+
+    StructCombined {
+        identifier: String,
+        members: Vec<AstNode>,
+        variables: Vec<AstNode>,
     },
 
     Switch {
@@ -379,35 +469,39 @@ pub enum AstNode {
     },
 
     VarDeclaration {
-        var_type: Type,
         identifier: String,
-        value: Option<Box<AstNode>>,
+        datatype: Type,
     },
 
-    ArrayInitializer {
-        items: Vec<AstNode>,
-    },
-
-    DesignatedInitializer {
-        members: Vec<(String, AstNode)>,
-    },
-
-    MemberAccess {
-        object: Box<AstNode>,
-        member: String,
-        is_arrow: bool,
+    VarDefinition {
+        identifier: String,
+        datatype: Type,
+        value: Box<AstNode>,
     },
 
     WhileStatement {
         condition: Box<AstNode>,
         body: Vec<AstNode>,
     },
+}
 
-    Break,
-    Continue,
 
-    Literal {
-        value: String,
-        data_type: String,
-    },
+fn serialize_struct_vars<S>(vars: &Vec<(AstNode, Vec<AstNode>)>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeSeq;
+    #[derive(Serialize)]
+    struct StructVar<'a> {
+        #[serde(rename = "Variable")]
+        var: &'a AstNode,
+        #[serde(rename = "Initializers")]
+        initializers: &'a Vec<AstNode>,
+    }
+
+    let mut seq = serializer.serialize_seq(Some(vars.len()))?;
+    for (var, inits) in vars {
+        seq.serialize_element(&StructVar { var, initializers: inits })?;
+    }
+    seq.end()
 }
